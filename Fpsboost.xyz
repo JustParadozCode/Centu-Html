@@ -1,0 +1,905 @@
+-- fps boost ( feel free to skid 🤡 )
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace  = game:GetService("Workspace")
+local Lighting   = game:GetService("Lighting")
+local Replicated = game:GetService("ReplicatedStorage")
+
+local LP      = Players.LocalPlayer
+local Camera  = Workspace.CurrentCamera
+local Terrain = Workspace:FindFirstChildOfClass("Terrain")
+
+local function try(fn, ...)
+    local ok, v = pcall(fn, ...)
+    return ok and v
+end
+local function now() return os.clock() end
+
+--===========================================================================
+-- 1. BOOSTER
+--===========================================================================
+local Booster = {
+    enabled = false, writing = false, generation = 0, envOrig = nil,
+    originals = setmetatable({}, {__mode="k"}),
+    pending   = setmetatable({}, {__mode="k"}),
+    queueRunning = false, conns = {},
+}
+
+local function boosterConn(c)
+    if c then table.insert(Booster.conns, c) end
+    return c
+end
+local function boosterDisconnectAll()
+    for _, c in ipairs(Booster.conns) do try(function() c:Disconnect() end) end
+    table.clear(Booster.conns)
+end
+
+local function boosterPropFor(inst)
+    if inst:IsA("ParticleEmitter") or inst:IsA("Beam") or inst:IsA("Trail")
+        or inst:IsA("Fire") or inst:IsA("Smoke") or inst:IsA("Sparkles")
+        or inst:IsA("PostEffect") or inst:IsA("Clouds") or inst:IsA("Highlight") then
+        return "Enabled"
+    end
+    if inst:IsA("Light") then return "Shadows" end
+    return nil
+end
+
+local function boosterCapture(inst, prop)
+    if Booster.originals[inst] then return Booster.originals[inst] end
+    local v = try(function() return inst[prop] end)
+    if v == nil then return nil end
+    local rec = {property=prop, value=v}
+    Booster.originals[inst] = rec
+    return rec
+end
+
+local function boosterEnforce(inst)
+    if not Booster.enabled or not inst or not inst.Parent then return end
+    local rec = Booster.originals[inst]
+    if not rec then return end
+    Booster.writing = true
+    try(function() if inst[rec.property] ~= false then inst[rec.property] = false end end)
+    Booster.writing = false
+end
+
+local function boosterProcess(inst)
+    if not Booster.enabled or not inst or not inst.Parent then return end
+    local prop = boosterPropFor(inst)
+    if not prop then return end
+    if not boosterCapture(inst, prop) then return end
+    boosterEnforce(inst)
+end
+
+local function boosterCaptureEnv()
+    if Booster.envOrig then return end
+    local rec = {globalShadows = try(function() return Lighting.GlobalShadows end), terrain = {}}
+    if Terrain then
+        for _, p in ipairs({"WaterWaveSize","WaterWaveSpeed","WaterReflectance","Decoration"}) do
+            local v = try(function() return Terrain[p] end)
+            if v ~= nil then rec.terrain[p] = v end
+        end
+    end
+    local q = try(function() return settings().Rendering.QualityLevel end)
+    if q then rec.qualityCaptured, rec.qualityLevel = true, q end
+    Booster.envOrig = rec
+end
+
+local function boosterEnforceEnv()
+    if not Booster.enabled then return end
+    Booster.writing = true
+    try(function() Lighting.GlobalShadows = false end)
+    if Terrain then
+        try(function() Terrain.WaterWaveSize    = 0     end)
+        try(function() Terrain.WaterWaveSpeed   = 0     end)
+        try(function() Terrain.WaterReflectance = 0     end)
+        try(function() Terrain.Decoration       = false end)
+    end
+    try(function()
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    end)
+    Booster.writing = false
+end
+
+local function boosterDrain()
+    if Booster.queueRunning or not Booster.enabled or next(Booster.pending) == nil then return end
+    Booster.queueRunning = true
+    local gen = Booster.generation
+    task.spawn(function()
+        local perFrame = 140
+        while Booster.enabled and gen == Booster.generation do
+            local t = now()
+            local nextAt, count = nil, 0
+            for inst, rec in pairs(Booster.pending) do
+                if not inst or not inst.Parent then
+                    Booster.pending[inst] = nil
+                else
+                    if t >= (rec.nextAt or t) then
+                        if rec.stage == 0 then
+                            boosterProcess(inst)
+                            rec.stage, rec.nextAt = 1, rec.firstAt
+                        elseif rec.stage == 1 then
+                            boosterEnforce(inst)
+                            rec.stage, rec.nextAt = 2, rec.finalAt
+                        else
+                            boosterEnforce(inst)
+                            Booster.pending[inst] = nil
+                        end
+                        count += 1
+                        if count >= perFrame then break end
+                        nextAt = rec.nextAt or t
+                    else
+                        nextAt = nextAt and math.min(nextAt, rec.nextAt) or rec.nextAt
+                    end
+                end
+            end
+            if next(Booster.pending) == nil then break end
+            if count >= perFrame then RunService.Heartbeat:Wait()
+            else task.wait(math.clamp((nextAt or t) - now(), 0.01, 0.04)) end
+        end
+        Booster.queueRunning = false
+        if Booster.enabled and next(Booster.pending) ~= nil then boosterDrain() end
+    end)
+end
+
+local function boosterQueue(inst)
+    if not Booster.enabled or not inst then return end
+    local t = now()
+    local rec = Booster.pending[inst]
+    if rec then
+        rec.stage, rec.nextAt = 0, t
+        rec.firstAt, rec.finalAt = t + 0.08, t + 0.25
+    else
+        Booster.pending[inst] = {stage=0, nextAt=t, firstAt=t+0.08, finalAt=t+0.25}
+    end
+    boosterDrain()
+end
+
+local function boosterScanRoot(root, gen)
+    local list = try(function() return root:GetDescendants() end)
+    if not list then return end
+    local perFrame = 140
+    for i, inst in ipairs(list) do
+        if not Booster.enabled or gen ~= Booster.generation then return end
+        boosterProcess(inst)
+        if i % perFrame == 0 then RunService.Heartbeat:Wait() end
+    end
+end
+
+local function boosterStart()
+    if Booster.enabled then boosterEnforceEnv(); return end
+    Booster.enabled = true
+    Booster.generation += 1
+    local gen = Booster.generation
+    boosterCaptureEnv()
+    boosterConn(Lighting:GetPropertyChangedSignal("GlobalShadows"):Connect(function()
+        if Booster.enabled and not Booster.writing then boosterEnforceEnv() end
+    end))
+    if Terrain then
+        boosterConn(Terrain.DescendantAdded:Connect(function(i)
+            if boosterPropFor(i) then boosterQueue(i) end
+        end))
+    end
+    boosterConn(Lighting.DescendantAdded:Connect(function(i)
+        if boosterPropFor(i) then boosterQueue(i) end
+    end))
+    boosterEnforceEnv()
+    task.spawn(function()
+        boosterScanRoot(Terrain, gen)
+        if Booster.enabled and gen == Booster.generation then
+            boosterScanRoot(Lighting, gen)
+        end
+    end)
+end
+
+local function boosterStop(restore)
+    if not Booster.enabled and not Booster.envOrig then return end
+    Booster.enabled = false
+    Booster.generation += 1
+    boosterDisconnectAll()
+    table.clear(Booster.pending)
+    if restore ~= false then
+        Booster.writing = true
+        for inst, rec in pairs(Booster.originals) do
+            if inst and inst.Parent then
+                try(function() inst[rec.property] = rec.value end)
+            end
+        end
+        local e = Booster.envOrig
+        if e then
+            if e.globalShadows ~= nil then
+                try(function() Lighting.GlobalShadows = e.globalShadows end)
+            end
+            if Terrain then
+                for p, v in pairs(e.terrain or {}) do
+                    try(function() Terrain[p] = v end)
+                end
+            end
+            if e.qualityCaptured then
+                try(function() settings().Rendering.QualityLevel = e.qualityLevel end)
+            end
+        end
+        Booster.writing = false
+    end
+    Booster.envOrig = nil
+    Booster.originals = setmetatable({}, {__mode="k"})
+end
+
+--===========================================================================
+-- 2. NO FOG
+--===========================================================================
+local NoFog = {
+    enabled = false, writing = false, lightingOrig = nil,
+    originals = setmetatable({}, {__mode="k"}),
+    watched   = setmetatable({}, {__mode="k"}),
+    boundCameras = setmetatable({}, {__mode="k"}),
+    conns = {},
+}
+
+local FOG_PROPS = {"Density","Haze","Glare","Offset"}
+local FOG_COLOR = Color3.fromRGB(200, 200, 200)
+
+local function fogConn(c)
+    if c then table.insert(NoFog.conns, c) end
+end
+local function fogDisconnectAll()
+    for _, c in ipairs(NoFog.conns) do try(function() c:Disconnect() end) end
+    table.clear(NoFog.conns)
+end
+
+local function fogRelevant(inst)
+    if inst:IsA("Atmosphere") then return inst.Parent == Lighting end
+    if inst:IsA("Clouds") then return Terrain and inst.Parent == Terrain end
+    if inst:IsA("BloomEffect") or inst:IsA("DepthOfFieldEffect") or inst:IsA("SunRaysEffect") then
+        return inst.Parent == Lighting or inst.Parent == Camera
+    end
+    return false
+end
+
+local function fogCapture(inst)
+    if NoFog.originals[inst] then return NoFog.originals[inst] end
+    local rec
+    if inst:IsA("Atmosphere") then
+        rec = {kind="Atmosphere", Parent=inst.Parent}
+        for _, p in ipairs(FOG_PROPS) do
+            local v = try(function() return inst[p] end)
+            if v ~= nil then rec[p] = v end
+        end
+    elseif inst:IsA("Clouds") then
+        rec = {kind="Clouds", Enabled=inst.Enabled, Cover=inst.Cover, Density=inst.Density}
+    else
+        rec = {kind="PostEffect", Enabled=inst.Enabled}
+        if inst:IsA("BloomEffect") then
+            rec.Intensity, rec.Size, rec.Threshold = inst.Intensity, inst.Size, inst.Threshold
+        end
+    end
+    NoFog.originals[inst] = rec
+    return rec
+end
+
+local function fogEnforceLighting()
+    if not NoFog.enabled then return end
+    NoFog.writing = true
+    try(function()
+        if Lighting.FogStart ~= 0 then Lighting.FogStart = 0 end
+        if Lighting.FogEnd ~= 1e10 then Lighting.FogEnd = 1e10 end
+        if Lighting.FogColor ~= FOG_COLOR then Lighting.FogColor = FOG_COLOR end
+        if Lighting.EnvironmentDiffuseScale ~= 0  then Lighting.EnvironmentDiffuseScale = 0  end
+        if Lighting.EnvironmentSpecularScale ~= 0 then Lighting.EnvironmentSpecularScale = 0 end
+    end)
+    NoFog.writing = false
+end
+
+local function fogEnforceObject(inst)
+    if not NoFog.enabled or not inst or not fogRelevant(inst) then return end
+    NoFog.writing = true
+    if inst:IsA("Atmosphere") then
+        for _, p in ipairs(FOG_PROPS) do
+            try(function() if inst[p] ~= 0 then inst[p] = 0 end end)
+        end
+        try(function() inst.Parent = nil end)
+    elseif inst:IsA("Clouds") then
+        try(function()
+            inst.Enabled, inst.Cover, inst.Density = false, 0, 0
+        end)
+    else
+        try(function()
+            if inst:IsA("BloomEffect") then inst.Intensity, inst.Size = 0, 0 end
+            if inst.Enabled then inst.Enabled = false end
+        end)
+    end
+    NoFog.writing = false
+end
+
+local function fogQueueObject(inst)
+    task.defer(function() if NoFog.enabled then fogEnforceObject(inst) end end)
+end
+local function fogQueueLighting()
+    task.defer(function() if NoFog.enabled then fogEnforceLighting() end end)
+end
+
+local function fogWatch(inst, prop)
+    fogConn(inst:GetPropertyChangedSignal(prop):Connect(function()
+        if NoFog.enabled and not NoFog.writing then fogQueueObject(inst) end
+    end))
+end
+
+local function fogProcess(inst)
+    if not inst or not fogRelevant(inst) then return end
+    if NoFog.watched[inst] then fogEnforceObject(inst); return end
+    if not fogCapture(inst) then return end
+    NoFog.watched[inst] = true
+    if inst:IsA("Atmosphere") then
+        for _, p in ipairs(FOG_PROPS) do fogWatch(inst, p) end
+    else
+        fogWatch(inst, "Enabled")
+    end
+    fogEnforceObject(inst)
+end
+
+local function fogBindCamera(cam)
+    if not cam or NoFog.boundCameras[cam] then return end
+    NoFog.boundCameras[cam] = true
+    for _, c in ipairs(cam:GetChildren()) do fogProcess(c) end
+    fogConn(cam.ChildAdded:Connect(function(c)
+        if c:IsA("BloomEffect") or c:IsA("DepthOfFieldEffect") or c:IsA("SunRaysEffect") then
+            task.defer(function() if NoFog.enabled and c.Parent == cam then fogProcess(c) end end)
+        end
+    end))
+end
+
+local function fogScan()
+    for _, c in ipairs(Lighting:GetChildren()) do fogProcess(c) end
+    if Terrain then
+        for _, c in ipairs(Terrain:GetChildren()) do fogProcess(c) end
+    end
+    fogBindCamera(Camera)
+end
+
+local function fogStart()
+    if NoFog.enabled then fogEnforceLighting(); fogScan(); return end
+    NoFog.enabled = true
+    NoFog.lightingOrig = {
+        FogStart = Lighting.FogStart,
+        FogEnd   = Lighting.FogEnd,
+        FogColor = Lighting.FogColor,
+        EnvironmentDiffuseScale  = Lighting.EnvironmentDiffuseScale,
+        EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
+    }
+    for _, p in ipairs({"FogStart","FogEnd","FogColor","EnvironmentDiffuseScale","EnvironmentSpecularScale"}) do
+        fogConn(Lighting:GetPropertyChangedSignal(p):Connect(function()
+            if not NoFog.writing then fogQueueLighting() end
+        end))
+    end
+    fogConn(Lighting.ChildAdded:Connect(function(i)
+        if i:IsA("Atmosphere") or i:IsA("BloomEffect") or i:IsA("DepthOfFieldEffect") or i:IsA("SunRaysEffect") then
+            task.defer(function() if NoFog.enabled and i.Parent == Lighting then fogProcess(i) end end)
+        end
+    end))
+    if Terrain then
+        fogConn(Terrain.ChildAdded:Connect(function(c)
+            if c:IsA("Clouds") then
+                task.defer(function() if NoFog.enabled and c.Parent == Terrain then fogProcess(c) end end)
+            end
+        end))
+    end
+    fogConn(Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+        if NoFog.enabled then
+            task.defer(function() fogBindCamera(Workspace.CurrentCamera) end)
+        end
+    end))
+    fogEnforceLighting()
+    fogScan()
+end
+
+local function fogStop(restore)
+    if not NoFog.enabled and not NoFog.lightingOrig then return end
+    NoFog.enabled = false
+    fogDisconnectAll()
+    if restore ~= false then
+        NoFog.writing = true
+        local o = NoFog.lightingOrig
+        if o then
+            try(function() Lighting.FogStart = o.FogStart end)
+            try(function() Lighting.FogEnd   = o.FogEnd   end)
+            try(function() Lighting.FogColor = o.FogColor end)
+            try(function() Lighting.EnvironmentDiffuseScale  = o.EnvironmentDiffuseScale  end)
+            try(function() Lighting.EnvironmentSpecularScale = o.EnvironmentSpecularScale end)
+        end
+        for inst, rec in pairs(NoFog.originals) do
+            if inst and (inst.Parent or rec.kind == "Atmosphere") then
+                if rec.kind == "Atmosphere" then
+                    for _, p in ipairs(FOG_PROPS) do
+                        if rec[p] ~= nil then try(function() inst[p] = rec[p] end) end
+                    end
+                    try(function() inst.Parent = rec.Parent or Lighting end)
+                elseif rec.kind == "Clouds" then
+                    try(function()
+                        inst.Enabled, inst.Cover, inst.Density = rec.Enabled, rec.Cover, rec.Density
+                    end)
+                else
+                    try(function()
+                        inst.Enabled = rec.Enabled
+                        if inst:IsA("BloomEffect") then
+                            inst.Intensity, inst.Size, inst.Threshold = rec.Intensity, rec.Size, rec.Threshold
+                        end
+                    end)
+                end
+            end
+        end
+        NoFog.writing = false
+    end
+    NoFog.lightingOrig = nil
+    table.clear(NoFog.originals)
+end
+
+--===========================================================================
+-- 3. HIDE V4 EFFECTS
+--===========================================================================
+local HideV4 = {
+    enabled = false,
+    modified = setmetatable({}, {__mode="k"}),
+    charStates = setmetatable({}, {__mode="k"}),
+    conns = {},
+    generation = 0,
+}
+
+local V4_TRANSFORM_ATTRS = {"RaceTransformed", "Transformed", "IsTransformed", "FruitTransformed"}
+
+local function v4Conn(c)
+    if c then table.insert(HideV4.conns, c) end
+end
+local function v4DisconnectAll()
+    for _, c in ipairs(HideV4.conns) do try(function() c:Disconnect() end) end
+    table.clear(HideV4.conns)
+end
+
+local function v4IsRenderable(inst)
+    return inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam")
+        or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles")
+        or inst:IsA("Light") or inst:IsA("Highlight") or inst:IsA("PostEffect")
+        or inst:IsA("BasePart") or inst:IsA("Decal") or inst:IsA("Texture")
+        or inst:IsA("BillboardGui") or inst:IsA("SurfaceGui")
+end
+
+local function v4SetRec(inst, prop, value)
+    local rec = HideV4.modified[inst]
+    if not rec then
+        rec = {marker = inst:GetAttribute("V4Hidden")}
+        HideV4.modified[inst] = rec
+        try(function() inst:SetAttribute("V4Hidden", true) end)
+    end
+    if rec[prop] == nil then rec[prop] = value end
+end
+
+local function v4Hide(inst)
+    if not HideV4.enabled or not inst or not inst.Parent or not v4IsRenderable(inst) then return end
+    try(function()
+        if inst:IsA("ParticleEmitter") then
+            v4SetRec(inst, "Enabled", inst.Enabled)
+            v4SetRec(inst, "Transparency", inst.Transparency)
+            inst.Enabled = false
+            inst.Transparency = NumberSequence.new(1)
+            inst:Clear()
+        elseif inst:IsA("Trail") or inst:IsA("Beam") then
+            v4SetRec(inst, "Enabled", inst.Enabled)
+            v4SetRec(inst, "Transparency", inst.Transparency)
+            inst.Enabled = false
+            inst.Transparency = NumberSequence.new(1)
+        elseif inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles")
+            or inst:IsA("Light") or inst:IsA("PostEffect")
+            or inst:IsA("BillboardGui") or inst:IsA("SurfaceGui") then
+            v4SetRec(inst, "Enabled", inst.Enabled)
+            inst.Enabled = false
+        elseif inst:IsA("Highlight") then
+            v4SetRec(inst, "Enabled", inst.Enabled)
+            v4SetRec(inst, "FillTransparency", inst.FillTransparency)
+            v4SetRec(inst, "OutlineTransparency", inst.OutlineTransparency)
+            inst.Enabled = false
+            inst.FillTransparency, inst.OutlineTransparency = 1, 1
+        elseif inst:IsA("BasePart") then
+            v4SetRec(inst, "LocalTransparencyModifier", inst.LocalTransparencyModifier)
+            inst.LocalTransparencyModifier = 1
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            v4SetRec(inst, "Transparency", inst.Transparency)
+            inst.Transparency = 1
+        end
+    end)
+end
+
+local function v4HideTree(root)
+    if not HideV4.enabled or not root or not root.Parent then return end
+    v4Hide(root)
+    for _, d in ipairs(root:GetDescendants()) do v4Hide(d) end
+end
+
+local function v4Restore(inst)
+    local rec = HideV4.modified[inst]
+    if not rec then return end
+    if inst and inst.Parent then
+        try(function()
+            for p, v in pairs(rec) do
+                if p ~= "marker" then inst[p] = v end
+            end
+            inst:SetAttribute("V4Hidden", rec.marker)
+        end)
+    end
+    HideV4.modified[inst] = nil
+end
+
+local function v4ClearCharState(st)
+    if not st then return end
+    for inst in pairs(st.modified or {}) do v4Restore(inst) end
+    st.modified = setmetatable({}, {__mode="k"})
+end
+
+local function v4UpdateCharState(st)
+    local char = st.character
+    if not char then return end
+    local transformed = false
+    for _, a in ipairs(V4_TRANSFORM_ATTRS) do
+        if char:GetAttribute(a) == true then transformed = true; break end
+    end
+    local v = char:FindFirstChild("RaceTransformed")
+    if v and v:IsA("BoolValue") and v.Value then transformed = true end
+    if transformed then
+        st.active = true
+        st.recentUntil = math.huge
+    elseif st.active then
+        st.active = false
+        st.recentUntil = now() + 12
+    end
+end
+
+local function v4TrackChar(char)
+    if not char or HideV4.charStates[char] then return end
+    local st = {
+        character = char, active = false, recentUntil = 0,
+        modified = setmetatable({}, {__mode="k"}),
+    }
+    HideV4.charStates[char] = st
+    local function bindTransform(v)
+        if st.transformedConn then
+            try(function() st.transformedConn:Disconnect() end)
+        end
+        if v and v:IsA("BoolValue") then
+            st.transformedConn = v:Connect(function()
+                local was = st.active
+                v4UpdateCharState(st)
+                if was and not st.active then v4ClearCharState(st) end
+            end)
+            v4Conn(st.transformedConn)
+        end
+    end
+    bindTransform(char:FindFirstChild("RaceTransformed"))
+    v4UpdateCharState(st)
+    v4Conn(char.ChildAdded:Connect(function(c)
+        if c.Name == "RaceTransformed" then bindTransform(c) end
+    end))
+end
+
+local function v4ScanWorld()
+    if not HideV4.enabled then return end
+    local w = Workspace:FindFirstChild("_WorldOrigin")
+    if not w then return end
+    for _, child in ipairs(w:GetChildren()) do
+        if child:IsA("Model") or child:IsA("Folder") then
+            local name = tostring(child.Name):lower()
+            if name:find("race", 1, true) or name:find("v4", 1, true)
+                or name:find("awaken", 1, true) or name:find("transform", 1, true) then
+                v4HideTree(child)
+            end
+        end
+    end
+end
+
+local function v4Start()
+    if HideV4.enabled then return end
+    HideV4.enabled = true
+    HideV4.generation += 1
+    local gen = HideV4.generation
+    v4Conn(Players.PlayerAdded:Connect(function(p)
+        p.CharacterAdded:Connect(v4TrackChar)
+    end))
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then v4TrackChar(p.Character) end
+        v4Conn(p.CharacterAdded:Connect(v4TrackChar))
+    end
+    for _, c in ipairs(Lighting:GetChildren()) do
+        if c:IsA("PostEffect") and (c.Name == "RaceColor" or c.Name == "DracoFieldCC" or c.Name == "ScreenColor1") then
+            v4Hide(c)
+        end
+    end
+    v4Conn(Lighting.ChildAdded:Connect(function(c)
+        if c:IsA("PostEffect") and (c.Name == "RaceColor" or c.Name == "DracoFieldCC" or c.Name == "ScreenColor1") then
+            task.defer(function() if HideV4.enabled and c.Parent then v4Hide(c) end end)
+        end
+    end))
+    task.spawn(function()
+        while HideV4.enabled and gen == HideV4.generation do
+            try(v4ScanWorld)
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function v4Stop(restore)
+    HideV4.enabled = false
+    HideV4.generation += 1
+    v4DisconnectAll()
+    if restore ~= false then
+        for inst in pairs(HideV4.modified) do v4Restore(inst) end
+        for _, st in pairs(HideV4.charStates) do v4ClearCharState(st) end
+    end
+    HideV4.charStates = setmetatable({}, {__mode="k"})
+    HideV4.modified   = setmetatable({}, {__mode="k"})
+end
+
+--===========================================================================
+-- 4. HIDE CONTROL EFFECTS
+--===========================================================================
+local HideControl = {
+    enabled = false,
+    modified = setmetatable({}, {__mode="k"}),
+    pausedTracks = setmetatable({}, {__mode="k"}),
+    conns = {},
+    generation = 0,
+}
+
+local function ctlConn(c)
+    if c then table.insert(HideControl.conns, c) end
+end
+local function ctlDisconnectAll()
+    for _, c in ipairs(HideControl.conns) do try(function() c:Disconnect() end) end
+    table.clear(HideControl.conns)
+end
+
+local function ctlSetRec(inst, prop, value)
+    local rec = HideControl.modified[inst]
+    if not rec then
+        rec = {marker = inst:GetAttribute("ControlHidden")}
+        HideControl.modified[inst] = rec
+        try(function() inst:SetAttribute("ControlHidden", true) end)
+    end
+    if rec[prop] == nil then rec[prop] = value end
+end
+
+local function ctlHide(inst)
+    if not HideControl.enabled or not inst or not inst.Parent then return end
+    try(function()
+        if inst:IsA("ParticleEmitter") then
+            ctlSetRec(inst, "Enabled", inst.Enabled)
+            ctlSetRec(inst, "Transparency", inst.Transparency)
+            inst.Enabled = false
+            inst.Transparency = NumberSequence.new(1)
+            inst:Clear()
+        elseif inst:IsA("Beam") or inst:IsA("Trail") then
+            ctlSetRec(inst, "Enabled", inst.Enabled)
+            ctlSetRec(inst, "Transparency", inst.Transparency)
+            inst.Enabled = false
+            inst.Transparency = NumberSequence.new(1)
+        elseif inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles")
+            or inst:IsA("Light") or inst:IsA("Highlight")
+            or inst:IsA("BillboardGui") or inst:IsA("SurfaceGui") then
+            ctlSetRec(inst, "Enabled", inst.Enabled)
+            inst.Enabled = false
+        elseif inst:IsA("BasePart") then
+            ctlSetRec(inst, "LocalTransparencyModifier", inst.LocalTransparencyModifier)
+            inst.LocalTransparencyModifier = 1
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            ctlSetRec(inst, "Transparency", inst.Transparency)
+            inst.Transparency = 1
+        end
+    end)
+end
+
+local function ctlPause(animator)
+    if not animator or HideControl.pausedTracks[animator] then return end
+    local speed = 1
+    try(function() speed = animator.Speed end)
+    HideControl.pausedTracks[animator] = speed
+    try(function() animator:AdjustSpeed(0) end)
+end
+
+local function ctlRestore(inst)
+    local rec = HideControl.modified[inst]
+    if not rec then return end
+    if inst and inst.Parent then
+        try(function()
+            for p, v in pairs(rec) do
+                if p ~= "marker" then inst[p] = v end
+            end
+            inst:SetAttribute("ControlHidden", rec.marker)
+        end)
+    end
+    HideControl.modified[inst] = nil
+end
+
+local function ctlScan()
+    if not HideControl.enabled then return end
+    local w = Workspace:FindFirstChild("_WorldOrigin")
+    if not w then return end
+    for _, child in ipairs(w:GetChildren()) do
+        if child:IsA("Model") and child.Name == "Bubble" then
+            local hex, room = child:FindFirstChild("HexBubble"), child:FindFirstChild("Room")
+            if hex and room then
+                for _, d in ipairs(child:GetDescendants()) do ctlHide(d) end
+                local anim = child:FindFirstChildOfClass("AnimationController")
+                if anim then ctlPause(anim:FindFirstChildOfClass("Animator")) end
+            end
+        end
+        if child:IsA("BasePart") and child.Name == "Globe" then
+            for _, d in ipairs(child:GetDescendants()) do ctlHide(d) end
+        end
+        if child:IsA("Model") and child.Name:match("^ControlDaggers") then
+            for _, d in ipairs(child:GetDescendants()) do ctlHide(d) end
+        end
+    end
+end
+
+local function ctlStart()
+    if HideControl.enabled then return end
+    HideControl.enabled = true
+    HideControl.generation += 1
+    local gen = HideControl.generation
+    ctlConn(Workspace.ChildAdded:Connect(function(c)
+        if c.Name == "_WorldOrigin" then
+            task.defer(function() if HideControl.enabled then ctlScan() end end)
+        end
+    end))
+    task.spawn(function()
+        while HideControl.enabled and gen == HideControl.generation do
+            try(ctlScan)
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function ctlStop(restore)
+    HideControl.enabled = false
+    HideControl.generation += 1
+    ctlDisconnectAll()
+    if restore ~= false then
+        for inst in pairs(HideControl.modified) do ctlRestore(inst) end
+        for anim, speed in pairs(HideControl.pausedTracks) do
+            try(function() anim:AdjustSpeed(speed) end)
+        end
+    end
+    HideControl.modified = setmetatable({}, {__mode="k"})
+    HideControl.pausedTracks = setmetatable({}, {__mode="k"})
+end
+
+--===========================================================================
+-- 5. NATIVE FAST MODE
+--===========================================================================
+local FastMode = { generation = 0, requested = false }
+
+local function setFastModeUI(on)
+    try(function()
+        local pg = LP:FindFirstChildOfClass("PlayerGui")
+        local main = pg and pg:FindFirstChild("Main")
+        local menu = main and main:FindFirstChild("SettingsMenu")
+        local content = menu and menu:FindFirstChild("Content")
+        local scroll = content and content:FindFirstChild("ScrollingFrame")
+        local fm = scroll and scroll:FindFirstChild("FastMode")
+        local first, second = fm and fm:FindFirstChild("FirstButton"), fm and fm:FindFirstChild("SecondButton")
+        if not first or not second then return end
+        local t1, t2 = first:FindFirstChild("Trans"), second:FindFirstChild("Trans")
+        first.BackgroundColor3  = on and Color3.fromRGB(50, 185, 65)    or Color3.fromRGB(158, 158, 158)
+        second.BackgroundColor3 = on and Color3.fromRGB(158, 158, 158) or Color3.fromRGB(255, 79, 79)
+        if t1 then t1.BackgroundColor3 = on and Color3.fromRGB(76, 214, 90)    or Color3.fromRGB(191, 191, 191) end
+        if t2 then t2.BackgroundColor3 = on and Color3.fromRGB(191, 191, 191)  or Color3.fromRGB(255, 112, 112) end
+    end)
+end
+
+local function processRoot(root, cache, gen)
+    if not root then return true end
+    local t0 = now()
+    for _, inst in ipairs(root:GetDescendants()) do
+        if gen ~= FastMode.generation or not FastMode.requested then return false end
+        if inst:IsA("BasePart") then
+            if cache[inst] == nil then cache[inst] = inst.Material end
+            inst.Material = Enum.Material.SmoothPlastic
+        elseif inst:IsA("Texture") and not inst:GetAttribute("Offset") then
+            inst:Destroy()
+        end
+        if now() - t0 > 0.008 then
+            task.wait()
+            t0 = now()
+        end
+    end
+    return true
+end
+
+local function applyFastMode(on)
+    on = on == true
+    FastMode.requested = on
+    FastMode.generation += 1
+    local gen = FastMode.generation
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local Global = require(Replicated:WaitForChild("Global"))
+            if on then
+                if Global.FastMode then setFastModeUI(true); return end
+                if Global.reducing then
+                    for _ = 1, 40 do
+                        if gen ~= FastMode.generation or Global.FastMode or not Global.reducing then break end
+                        task.wait(0.1)
+                    end
+                    if gen ~= FastMode.generation then return end
+                    if Global.FastMode then setFastModeUI(true); return end
+                end
+                Global.reducing = true
+                Global.FastMode  = true
+                Global.FastModeCache = {}
+                local cache = Global.FastModeCache
+                if not processRoot(Workspace:FindFirstChild("Map"), cache, gen) then return end
+                if not processRoot(Replicated:FindFirstChild("Unloaded"), cache, gen) then return end
+                if gen ~= FastMode.generation then return end
+                local scripts = LP:FindFirstChild("PlayerScripts")
+                local actor   = scripts and scripts:FindFirstChild("OptimizerClientActor")
+                if actor and actor.SendMessage then actor:SendMessage("Optimize", true) end
+                setFastModeUI(true)
+            else
+                Global.FastMode  = false
+                Global.reducing   = false
+                local cache = Global.FastModeCache
+                Global.FastModeCache = nil
+                if type(cache) == "table" then
+                    local t0 = now()
+                    for inst, mat in pairs(cache) do
+                        if gen ~= FastMode.generation then return end
+                        if inst and inst.Parent then inst.Material = mat end
+                        if now() - t0 > 0.008 then
+                            task.wait()
+                            t0 = now()
+                        end
+                    end
+                end
+                local scripts = LP:FindFirstChild("PlayerScripts")
+                local actor   = scripts and scripts:FindFirstChild("OptimizerClientActor")
+                if actor and actor.SendMessage then actor:SendMessage("Optimize", false) end
+                setFastModeUI(false)
+            end
+        end)
+        if not ok then warn("[FPSOptimizer] FastMode:", err) end
+    end)
+end
+
+--===========================================================================
+-- PUBLIC API
+--===========================================================================
+local API = {
+    restore      = nil,
+    boosterOn    = false,
+    fogOn        = false,
+    v4On         = false,
+    controlOn    = false,
+    fastModeOn   = false,
+    booster      = { setEnabled = function(v) API.boosterOn = v; if v then boosterStart() else boosterStop(true) end end },
+    noFog        = { setEnabled = function(v) API.fogOn = v;     if v then fogStart()     else fogStop(true)     end end },
+    v4           = { setEnabled = function(v) API.v4On = v;      if v then v4Start()      else v4Stop(true)      end end },
+    control      = { setEnabled = function(v) API.controlOn = v; if v then ctlStart()    else ctlStop(true)     end end },
+    fastMode     = { setEnabled = function(v) API.fastModeOn = v; applyFastMode(v) end },
+}
+
+function API.restore()
+    if API.v4On      then v4Stop(true)        end
+    if API.controlOn then ctlStop(true)       end
+    if API.fastModeOn then applyFastMode(false) end
+    if API.fogOn     then fogStop(true)       end
+    if API.boosterOn then boosterStop(true)   end
+    API.v4On, API.controlOn, API.fastModeOn, API.fogOn, API.boosterOn = false, false, false, false, false
+end
+
+_G.FPSOptimizer = API
+
+--===========================================================================
+-- APPLY ON EXECUTION
+--===========================================================================
+API.booster.setEnabled(true)
+API.noFog.setEnabled(true)
+API.v4.setEnabled(true)
+API.control.setEnabled(true)
+task.delay(1, function() API.fastMode.setEnabled(true) end)
+
+print("[FPSOptimizer] applied")
