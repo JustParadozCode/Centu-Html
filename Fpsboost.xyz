@@ -1,34 +1,28 @@
--- fps boost ( feel free to skid 🤡 )
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace  = game:GetService("Workspace")
-local Lighting   = game:GetService("Lighting")
-local Replicated = game:GetService("ReplicatedStorage")
+-- feel free to use
+local Players     = game:GetService("Players")
+local RunService  = game:GetService("RunService")
+local Workspace   = game:GetService("Workspace")
+local Lighting    = game:GetService("Lighting")
+local Replicated  = game:GetService("ReplicatedStorage")
 
 local LP      = Players.LocalPlayer
 local Camera  = Workspace.CurrentCamera
 local Terrain = Workspace:FindFirstChildOfClass("Terrain")
 
-local function try(fn, ...)
-    local ok, v = pcall(fn, ...)
-    return ok and v
-end
+local function try(fn, ...) local ok, v = pcall(fn, ...); return ok and v end
 local function now() return os.clock() end
 
 --===========================================================================
--- 1. BOOSTER
+-- 1. FPS BOOSTER
 --===========================================================================
 local Booster = {
     enabled = false, writing = false, generation = 0, envOrig = nil,
     originals = setmetatable({}, {__mode="k"}),
-    pending   = setmetatable({}, {__mode="k"}),
+    pending = setmetatable({}, {__mode="k"}),
     queueRunning = false, conns = {},
 }
 
-local function boosterConn(c)
-    if c then table.insert(Booster.conns, c) end
-    return c
-end
+local function boosterConn(c) if c then table.insert(Booster.conns, c) end; return c end
 local function boosterDisconnectAll()
     for _, c in ipairs(Booster.conns) do try(function() c:Disconnect() end) end
     table.clear(Booster.conns)
@@ -89,14 +83,12 @@ local function boosterEnforceEnv()
     Booster.writing = true
     try(function() Lighting.GlobalShadows = false end)
     if Terrain then
-        try(function() Terrain.WaterWaveSize    = 0     end)
-        try(function() Terrain.WaterWaveSpeed   = 0     end)
-        try(function() Terrain.WaterReflectance = 0     end)
-        try(function() Terrain.Decoration       = false end)
+        try(function() Terrain.WaterWaveSize = 0 end)
+        try(function() Terrain.WaterWaveSpeed = 0 end)
+        try(function() Terrain.WaterReflectance = 0 end)
+        try(function() Terrain.Decoration = false end)
     end
-    try(function()
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-    end)
+    try(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
     Booster.writing = false
 end
 
@@ -185,9 +177,7 @@ local function boosterStart()
     boosterEnforceEnv()
     task.spawn(function()
         boosterScanRoot(Terrain, gen)
-        if Booster.enabled and gen == Booster.generation then
-            boosterScanRoot(Lighting, gen)
-        end
+        if Booster.enabled and gen == Booster.generation then boosterScanRoot(Lighting, gen) end
     end)
 end
 
@@ -206,9 +196,7 @@ local function boosterStop(restore)
         end
         local e = Booster.envOrig
         if e then
-            if e.globalShadows ~= nil then
-                try(function() Lighting.GlobalShadows = e.globalShadows end)
-            end
+            if e.globalShadows ~= nil then try(function() Lighting.GlobalShadows = e.globalShadows end) end
             if Terrain then
                 for p, v in pairs(e.terrain or {}) do
                     try(function() Terrain[p] = v end)
@@ -230,7 +218,7 @@ end
 local NoFog = {
     enabled = false, writing = false, lightingOrig = nil,
     originals = setmetatable({}, {__mode="k"}),
-    watched   = setmetatable({}, {__mode="k"}),
+    watched = setmetatable({}, {__mode="k"}),
     boundCameras = setmetatable({}, {__mode="k"}),
     conns = {},
 }
@@ -238,9 +226,7 @@ local NoFog = {
 local FOG_PROPS = {"Density","Haze","Glare","Offset"}
 local FOG_COLOR = Color3.fromRGB(200, 200, 200)
 
-local function fogConn(c)
-    if c then table.insert(NoFog.conns, c) end
-end
+local function fogConn(c) if c then table.insert(NoFog.conns, c) end; return c end
 local function fogDisconnectAll()
     for _, c in ipairs(NoFog.conns) do try(function() c:Disconnect() end) end
     table.clear(NoFog.conns)
@@ -283,7 +269,7 @@ local function fogEnforceLighting()
         if Lighting.FogStart ~= 0 then Lighting.FogStart = 0 end
         if Lighting.FogEnd ~= 1e10 then Lighting.FogEnd = 1e10 end
         if Lighting.FogColor ~= FOG_COLOR then Lighting.FogColor = FOG_COLOR end
-        if Lighting.EnvironmentDiffuseScale ~= 0  then Lighting.EnvironmentDiffuseScale = 0  end
+        if Lighting.EnvironmentDiffuseScale ~= 0 then Lighting.EnvironmentDiffuseScale = 0 end
         if Lighting.EnvironmentSpecularScale ~= 0 then Lighting.EnvironmentSpecularScale = 0 end
     end)
     NoFog.writing = false
@@ -298,9 +284,7 @@ local function fogEnforceObject(inst)
         end
         try(function() inst.Parent = nil end)
     elseif inst:IsA("Clouds") then
-        try(function()
-            inst.Enabled, inst.Cover, inst.Density = false, 0, 0
-        end)
+        try(function() inst.Enabled, inst.Cover, inst.Density = false, 0, 0 end)
     else
         try(function()
             if inst:IsA("BloomEffect") then inst.Intensity, inst.Size = 0, 0 end
@@ -349,9 +333,7 @@ end
 
 local function fogScan()
     for _, c in ipairs(Lighting:GetChildren()) do fogProcess(c) end
-    if Terrain then
-        for _, c in ipairs(Terrain:GetChildren()) do fogProcess(c) end
-    end
+    if Terrain then for _, c in ipairs(Terrain:GetChildren()) do fogProcess(c) end end
     fogBindCamera(Camera)
 end
 
@@ -359,10 +341,9 @@ local function fogStart()
     if NoFog.enabled then fogEnforceLighting(); fogScan(); return end
     NoFog.enabled = true
     NoFog.lightingOrig = {
-        FogStart = Lighting.FogStart,
-        FogEnd   = Lighting.FogEnd,
+        FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd,
         FogColor = Lighting.FogColor,
-        EnvironmentDiffuseScale  = Lighting.EnvironmentDiffuseScale,
+        EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale,
         EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
     }
     for _, p in ipairs({"FogStart","FogEnd","FogColor","EnvironmentDiffuseScale","EnvironmentSpecularScale"}) do
@@ -383,9 +364,7 @@ local function fogStart()
         end))
     end
     fogConn(Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-        if NoFog.enabled then
-            task.defer(function() fogBindCamera(Workspace.CurrentCamera) end)
-        end
+        if NoFog.enabled then task.defer(function() fogBindCamera(Workspace.CurrentCamera) end) end
     end))
     fogEnforceLighting()
     fogScan()
@@ -400,9 +379,9 @@ local function fogStop(restore)
         local o = NoFog.lightingOrig
         if o then
             try(function() Lighting.FogStart = o.FogStart end)
-            try(function() Lighting.FogEnd   = o.FogEnd   end)
+            try(function() Lighting.FogEnd = o.FogEnd end)
             try(function() Lighting.FogColor = o.FogColor end)
-            try(function() Lighting.EnvironmentDiffuseScale  = o.EnvironmentDiffuseScale  end)
+            try(function() Lighting.EnvironmentDiffuseScale = o.EnvironmentDiffuseScale end)
             try(function() Lighting.EnvironmentSpecularScale = o.EnvironmentSpecularScale end)
         end
         for inst, rec in pairs(NoFog.originals) do
@@ -413,9 +392,7 @@ local function fogStop(restore)
                     end
                     try(function() inst.Parent = rec.Parent or Lighting end)
                 elseif rec.kind == "Clouds" then
-                    try(function()
-                        inst.Enabled, inst.Cover, inst.Density = rec.Enabled, rec.Cover, rec.Density
-                    end)
+                    try(function() inst.Enabled, inst.Cover, inst.Density = rec.Enabled, rec.Cover, rec.Density end)
                 else
                     try(function()
                         inst.Enabled = rec.Enabled
@@ -439,15 +416,14 @@ local HideV4 = {
     enabled = false,
     modified = setmetatable({}, {__mode="k"}),
     charStates = setmetatable({}, {__mode="k"}),
+    boundRenderers = setmetatable({}, {__mode="k"}),
     conns = {},
     generation = 0,
 }
 
 local V4_TRANSFORM_ATTRS = {"RaceTransformed", "Transformed", "IsTransformed", "FruitTransformed"}
 
-local function v4Conn(c)
-    if c then table.insert(HideV4.conns, c) end
-end
+local function v4Conn(c) if c then table.insert(HideV4.conns, c) end; return c end
 local function v4DisconnectAll()
     for _, c in ipairs(HideV4.conns) do try(function() c:Disconnect() end) end
     table.clear(HideV4.conns)
@@ -548,26 +524,28 @@ local function v4UpdateCharState(st)
         st.active = false
         st.recentUntil = now() + 12
     end
+    local pl = Players:GetPlayerFromCharacter(char)
+    local data = pl and pl:FindFirstChild("Data")
+    local race = data and data:FindFirstChild("Race")
+    st.race = tostring(race and race.Value or char:GetAttribute("Race") or ""):lower()
+    local dracoWings = char:GetAttribute("Accessory_DracoWings")
+    st.persistentDraco = st.race:find("draco", 1, true) ~= nil
+        and (dracoWings == true or (dracoWings == nil and char:FindFirstChild("WingV2", true) ~= nil))
 end
 
 local function v4TrackChar(char)
     if not char or HideV4.charStates[char] then return end
-    local st = {
-        character = char, active = false, recentUntil = 0,
-        modified = setmetatable({}, {__mode="k"}),
-    }
+    local st = {character=char, active=false, recentUntil=0,
+        modified=setmetatable({}, {__mode="k"})}
     HideV4.charStates[char] = st
     local function bindTransform(v)
-        if st.transformedConn then
-            try(function() st.transformedConn:Disconnect() end)
-        end
+        if st.transformedConn then try(function() st.transformedConn:Disconnect() end) end
         if v and v:IsA("BoolValue") then
-            st.transformedConn = v:Connect(function()
+            st.transformedConn = v4Conn(v.Changed:Connect(function()
                 local was = st.active
                 v4UpdateCharState(st)
-                if was and not st.active then v4ClearCharState(st) end
-            end)
-            v4Conn(st.transformedConn)
+                if was and not st.active and not st.persistentDraco then v4ClearCharState(st) end
+            end))
         end
     end
     bindTransform(char:FindFirstChild("RaceTransformed"))
@@ -631,7 +609,7 @@ local function v4Stop(restore)
         for _, st in pairs(HideV4.charStates) do v4ClearCharState(st) end
     end
     HideV4.charStates = setmetatable({}, {__mode="k"})
-    HideV4.modified   = setmetatable({}, {__mode="k"})
+    HideV4.modified = setmetatable({}, {__mode="k"})
 end
 
 --===========================================================================
@@ -645,9 +623,7 @@ local HideControl = {
     generation = 0,
 }
 
-local function ctlConn(c)
-    if c then table.insert(HideControl.conns, c) end
-end
+local function ctlConn(c) if c then table.insert(HideControl.conns, c) end; return c end
 local function ctlDisconnectAll()
     for _, c in ipairs(HideControl.conns) do try(function() c:Disconnect() end) end
     table.clear(HideControl.conns)
@@ -784,10 +760,10 @@ local function setFastModeUI(on)
         local first, second = fm and fm:FindFirstChild("FirstButton"), fm and fm:FindFirstChild("SecondButton")
         if not first or not second then return end
         local t1, t2 = first:FindFirstChild("Trans"), second:FindFirstChild("Trans")
-        first.BackgroundColor3  = on and Color3.fromRGB(50, 185, 65)    or Color3.fromRGB(158, 158, 158)
+        first.BackgroundColor3 = on and Color3.fromRGB(50, 185, 65) or Color3.fromRGB(158, 158, 158)
         second.BackgroundColor3 = on and Color3.fromRGB(158, 158, 158) or Color3.fromRGB(255, 79, 79)
-        if t1 then t1.BackgroundColor3 = on and Color3.fromRGB(76, 214, 90)    or Color3.fromRGB(191, 191, 191) end
-        if t2 then t2.BackgroundColor3 = on and Color3.fromRGB(191, 191, 191)  or Color3.fromRGB(255, 112, 112) end
+        if t1 then t1.BackgroundColor3 = on and Color3.fromRGB(76, 214, 90) or Color3.fromRGB(191, 191, 191) end
+        if t2 then t2.BackgroundColor3 = on and Color3.fromRGB(191, 191, 191) or Color3.fromRGB(255, 112, 112) end
     end)
 end
 
@@ -829,19 +805,19 @@ local function applyFastMode(on)
                     if Global.FastMode then setFastModeUI(true); return end
                 end
                 Global.reducing = true
-                Global.FastMode  = true
+                Global.FastMode = true
                 Global.FastModeCache = {}
                 local cache = Global.FastModeCache
                 if not processRoot(Workspace:FindFirstChild("Map"), cache, gen) then return end
                 if not processRoot(Replicated:FindFirstChild("Unloaded"), cache, gen) then return end
                 if gen ~= FastMode.generation then return end
                 local scripts = LP:FindFirstChild("PlayerScripts")
-                local actor   = scripts and scripts:FindFirstChild("OptimizerClientActor")
+                local actor = scripts and scripts:FindFirstChild("OptimizerClientActor")
                 if actor and actor.SendMessage then actor:SendMessage("Optimize", true) end
                 setFastModeUI(true)
             else
-                Global.FastMode  = false
-                Global.reducing   = false
+                Global.FastMode = false
+                Global.reducing = false
                 local cache = Global.FastModeCache
                 Global.FastModeCache = nil
                 if type(cache) == "table" then
@@ -856,50 +832,72 @@ local function applyFastMode(on)
                     end
                 end
                 local scripts = LP:FindFirstChild("PlayerScripts")
-                local actor   = scripts and scripts:FindFirstChild("OptimizerClientActor")
+                local actor = scripts and scripts:FindFirstChild("OptimizerClientActor")
                 if actor and actor.SendMessage then actor:SendMessage("Optimize", false) end
                 setFastModeUI(false)
             end
         end)
-        if not ok then warn("[FPSOptimizer] FastMode:", err) end
     end)
+end
+
+--===========================================================================
+-- MASTER CONTROL
+--===========================================================================
+local FPS = {
+    boosterOn = false,
+    fogOn     = false,
+    v4On      = false,
+    controlOn = false,
+    fastModeOn = false,
+}
+
+function FPS.set(key, on)
+    key = tostring(key):lower()
+    on = on == true
+    if key == "booster" then
+        FPS.boosterOn = on
+        if on then boosterStart() else boosterStop(true) end
+    elseif key == "fog" then
+        FPS.fogOn = on
+        if on then fogStart() else fogStop(true) end
+    elseif key == "v4" then
+        FPS.v4On = on
+        if on then v4Start() else v4Stop(true) end
+    elseif key == "control" then
+        FPS.controlOn = on
+        if on then ctlStart() else ctlStop(true) end
+    elseif key == "fastmode" then
+        FPS.fastModeOn = on
+        applyFastMode(on)
+    end
+end
+
+function FPS.setEnabled(on)
+    on = on == true
+    FPS.set("booster", on)
+    FPS.set("fog", on)
+    FPS.set("v4", on)
+    FPS.set("control", on)
+    if on then
+        task.delay(1, function() if FPS.boosterOn or FPS.fogOn then FPS.set("fastmode", true) end end)
+    else
+        FPS.set("fastmode", false)
+    end
 end
 
 --===========================================================================
 -- PUBLIC API
 --===========================================================================
-local API = {
-    restore      = nil,
-    boosterOn    = false,
-    fogOn        = false,
-    v4On         = false,
-    controlOn    = false,
-    fastModeOn   = false,
-    booster      = { setEnabled = function(v) API.boosterOn = v; if v then boosterStart() else boosterStop(true) end end },
-    noFog        = { setEnabled = function(v) API.fogOn = v;     if v then fogStart()     else fogStop(true)     end end },
-    v4           = { setEnabled = function(v) API.v4On = v;      if v then v4Start()      else v4Stop(true)      end end },
-    control      = { setEnabled = function(v) API.controlOn = v; if v then ctlStart()    else ctlStop(true)     end end },
-    fastMode     = { setEnabled = function(v) API.fastModeOn = v; applyFastMode(v) end },
-}
+_G.FPS = FPS
+_G.FPS.Booster = { setEnabled = function(on) FPS.set("booster", on) end }
+_G.FPS.NoFog   = { setEnabled = function(on) FPS.set("fog",     on) end }
+_G.FPS.HideV4  = { setEnabled = function(on) FPS.set("v4",      on) end }
+_G.FPS.HideControl = { setEnabled = function(on) FPS.set("control", on) end }
+_G.FPS.FastMode = { setEnabled = function(on) FPS.set("fastmode", on) end }
 
-function API.restore()
-    if API.v4On      then v4Stop(true)        end
-    if API.controlOn then ctlStop(true)       end
-    if API.fastModeOn then applyFastMode(false) end
-    if API.fogOn     then fogStop(true)       end
-    if API.boosterOn then boosterStop(true)   end
-    API.v4On, API.controlOn, API.fastModeOn, API.fogOn, API.boosterOn = false, false, false, false, false
-end
-
-_G.FPSOptimizer = API
-
---===========================================================================
--- APPLY ON EXECUTION
---===========================================================================
-API.booster.setEnabled(true)
-API.noFog.setEnabled(true)
-API.v4.setEnabled(true)
-API.control.setEnabled(true)
-task.delay(1, function() API.fastMode.setEnabled(true) end)
-
-print("[FPSOptimizer] applied")
+-- Auto-enable on execution
+FPS.set("booster", true)
+FPS.set("fog", true)
+FPS.set("v4", true)
+FPS.set("control", true)
+task.delay(1, function() FPS.set("fastmode", true) end)
